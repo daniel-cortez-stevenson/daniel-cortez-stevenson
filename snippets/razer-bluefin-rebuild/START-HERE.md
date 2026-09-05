@@ -4,34 +4,52 @@ Target reported by the current installation: **Razer Blade 15 (2022), RZ09-0421x
 
 This runbook deliberately stops before each irreversible action. Do not skip a gate. Commands marked **READ-ONLY** collect information. A wipe or firmware operation is never launched by the supplied scripts.
 
-## Intended final architecture
+## Intended architecture: one SSD now, two SSDs later
 
-Do not put Bluefin and Windows on different partitions of the same SSD. Bluefin explicitly says that dual boot from one disk is unsupported and recommends a dedicated disk plus the firmware boot selector.
+Do not divide the current internal SSD between Bluefin and Windows. Bluefin explicitly says same-disk dual boot is unsupported and recommends a dedicated drive with automatic partitioning.
 
-Recommended layout:
+### Stage A — today
 
-| Physical device | Contents | Filesystem/encryption | Purpose |
-|---|---|---|---|
-| Original 1 TB NVMe | Windows 11 Home | NTFS + BitLocker | Rekordbox, Razer firmware tools, Windows-only software |
-| New 2 TB or 4 TB NVMe | Bluefin LTS NVIDIA Stable | Installer-managed Linux layout + full-disk encryption | Primary OS, containers, models, Whisper, embeddings, development |
-| Optional external/NAS volume | Shared data only | Chosen separately | Deliberate interchange and backup |
+| Physical device | Contents | Purpose |
+|---|---|---|
+| Internal 1 TB NVMe | **Bluefin LTS NVIDIA Stable**, installer-managed encryption | Primary OS; the entire terabyte is available to Linux, containers, models, Whisper, embeddings, and development |
+| External backup drive | Selected personal data; official Windows installer files; optionally a quarantined image of the old SSD | Recovery/archive only; it is not trusted as an operating system |
+| Separate USB stick | Verified Bluefin installer | Installation/recovery media |
+| Separate USB stick | Official Windows 11 installer | A clean way to reinstall the licensed Windows edition later |
 
-Bluefin should be first in the UEFI boot order. Each SSD should have its own EFI System Partition and boot independently. Use the Razer boot menu to start Windows; do not make one operating system's bootloader responsible for the other.
+### Stage B — after adding another internal NVMe
 
-### What happens to the remaining storage?
+| Physical device | Contents | Purpose |
+|---|---|---|
+| Current internal 1 TB NVMe | Bluefin LTS NVIDIA Stable | Primary OS |
+| New internal NVMe | Fresh Windows 11 Home + BitLocker | Rekordbox, Razer firmware tools, and other Windows-only software |
 
-There is no safe, native filesystem that simultaneously gives Windows and Linux their best security and reliability characteristics:
+Each internal SSD will then have its own EFI System Partition and boot independently. Keep Bluefin first in the UEFI boot order and use the Razer firmware boot menu when Windows is wanted. Do not make one operating system's bootloader responsible for the other.
 
-- Bluefin's Linux filesystem is not natively writable by Windows.
-- NTFS is writable by Linux, but Windows hibernation/Fast Startup must be disabled before Linux writes to it.
-- BitLocker is not a convenient shared-filesystem solution for Bluefin.
-- exFAT is interoperable but lacks journaling and Unix permissions; it is poor storage for containers, models, databases, or a sole music-library copy.
+### “Preserving Windows” does not require preserving this installation
 
-Therefore, let each OS own its physical SSD initially. After both installations are stable, choose one of these:
+The Windows **license** and the Windows **installation currently on disk** are different things. Microsoft documents that a digital license is associated with the device hardware and that the same Windows edition can be reinstalled on the same device without entering a product key. The audit records the installed edition and activation state without exposing the full key.
 
-1. **Recommended:** no internal shared partition. Exchange files through an external encrypted SSD, NAS, or explicitly synchronized directory.
-2. **DJ convenience:** shrink Windows and create a separate 250-500 GB NTFS `SHARED` volume. Disable Windows hibernation/Fast Startup with `powercfg.exe /hibernate off`. Keep backups and do not place container storage, Linux home directories, databases, or model caches there. If it must be confidential in both systems, design a VeraCrypt-based shared volume later.
-3. **One SSD only:** do not install Bluefin. Use Ubuntu/Kubuntu/Ubuntu Studio for a conventional supported same-disk dual boot, or postpone Linux until a second SSD is installed.
+For this used machine, the preferred recovery set is:
+
+1. An official Windows 11 installer USB.
+2. A backup of known personal files and configuration exports.
+3. The audit report showing Windows 11 Home activation and whether an OEM key exists in firmware.
+4. Optionally, a full image of the old SSD labelled **UNTRUSTED — DO NOT BOOT**.
+
+Do not clone the seller's Windows installation to an external drive and then treat it as trusted. That preserves exactly the software and configuration the rebuild is intended to eliminate.
+
+### Can Windows boot from an external drive temporarily?
+
+Only as a compromise. Microsoft removed Windows To Go in Windows 10 version 2004, so a current portable Windows installation made with Rufus, WinToUSB, or similar tooling is not a Microsoft-supported deployment.
+
+- Do not attempt it on a USB thumb drive or spinning hard disk.
+- A fresh installation on a fast external NVMe SSD in a reliable USB 3.2 Gen 2 or Thunderbolt enclosure can be usable for occasional Windows access.
+- Expect rough edges around updates, sleep, BitLocker, device removal, audio latency, and performance.
+- Do not use portable Windows to flash BIOS/EC firmware or for a live Rekordbox performance.
+- Never boot the quarantined image of the old installation as the temporary Windows environment.
+
+If Windows is needed before the second internal SSD arrives, either use a fresh Windows virtual machine for ordinary applications or deliberately create a fresh portable Windows environment on an external NVMe. Otherwise, skip portable Windows entirely.
 
 ## Trust model: what “completely wipe” can mean
 
@@ -78,17 +96,23 @@ Treat anything recovered from the old installation as untrusted data. Do not pre
 
 ---
 
-# PHASE 1 — storage decision and installation media
+# PHASE 1 — backup, license evidence, and installation media
 
-## Gate 1: decide the physical disk layout
+## Gate 1: identify the only internal disk and the external targets
 
-Proceed with Bluefin only when two internal NVMe devices are present:
+From the audit, write down the internal NVMe's manufacturer, model, and capacity. The intended destructive target is the single internal 1 TB NVMe. Bluefin will own all of it.
 
-- Identify the original 1 TB SSD from the audit.
-- Install a new 2 TB minimum or 4 TB preferred NVMe in the second M.2 slot.
-- Record each drive's manufacturer, model, and capacity on paper.
+Before connecting backup media, list the current disks:
 
-If only one NVMe is present, **STOP 1**. Install the second SSD first or choose Ubuntu instead of Bluefin.
+```powershell
+Get-Disk | Sort-Object Number | Format-Table Number,FriendlyName,SerialNumber,BusType,PartitionStyle,Size -AutoSize
+```
+
+Connect the external backup drive, run the command again, and identify the new device by model, serial number, bus type, and capacity. Do not identify a destructive target by `Disk 0` alone.
+
+Back up only deliberate personal data: documents, source code, music projects, license/deactivation information, and the wallpaper if wanted. Do not carry forward executables, drivers, scheduled tasks, browser profiles, recovery partitions, or OEM utilities from the old installation.
+
+If a forensic-style full image is desired, create it from trusted Rescuezilla/Clonezilla media and label it **UNTRUSTED — DO NOT BOOT**. This is optional and is not needed to retain the Windows license. The destination must have enough free space; a raw uncompressed image may require approximately the full 1 TB capacity.
 
 ## Create media on another trusted computer
 
@@ -100,7 +124,7 @@ Use Microsoft's current Media Creation Tool:
 
 <https://www.microsoft.com/software-download/windows11>
 
-The existing license is Windows 11 Home, so reinstall **Home**, not Pro. A matching firmware-embedded or digital license normally activates automatically.
+The existing license is Windows 11 Home, so reinstall **Home**, not Pro. A matching digital or firmware-embedded license should reactivate automatically on the same device. Keep this installer after Bluefin is installed; it is the clean Windows recovery path for the future second SSD.
 
 ### Bluefin LTS NVIDIA USB
 
@@ -142,45 +166,15 @@ The calculated digest must exactly equal the published digest. Use **Fedora Medi
 
 Keep Secure Boot enabled when testing the Bluefin USB. Bluefin's documentation is temporarily inconsistent during the GDX/LTS migration, so successful Secure Boot of the exact ISO is an explicit acceptance gate—not an assumption.
 
-**STOP 2:** Confirm that both USB drives boot in UEFI mode, that the Bluefin checksum matches, and that the Bluefin live environment starts with Secure Boot still enabled. If the LTS NVIDIA image will not boot securely, use normal `bluefin-nvidia-open-stable-x86_64.iso` as the fallback; do not permanently weaken Secure Boot for the preferred image.
+**STOP 2:** Confirm the backup opens on another trusted computer, both USB drives boot in UEFI mode, the Bluefin checksum matches, and the Bluefin live environment starts with Secure Boot still enabled. If the LTS NVIDIA image will not boot securely, use normal `bluefin-nvidia-open-stable-x86_64.iso` as the fallback; do not permanently weaken Secure Boot for the preferred image.
 
 ---
 
-# PHASE 2 — establish a clean Windows firmware-service installation
+# PHASE 2 — firmware decision before erasing Windows
 
-Windows goes first because the official Razer firmware updaters are Windows applications.
+The official Razer firmware updaters are Windows applications. That creates one important gate: decide whether the machine needs a BIOS, EC, or keyboard-firmware update **before** giving the internal SSD to Bluefin.
 
-## Gate 2: isolate the Windows target
-
-For the safest installation:
-
-1. Power off and unplug the laptop.
-2. Leave only the original 1 TB SSD installed, or disable the new SSD in firmware if the firmware genuinely exposes that option.
-3. Insert only the Microsoft installer USB.
-4. Boot its **UEFI** entry from the Razer boot menu.
-
-Do not depend on disk numbering when two drives are attached. Windows Setup's `Disk 0` label is not a stable physical identity.
-
-## Clean installation
-
-Select Windows 11 Home and a custom installation. On the isolated original SSD, delete every partition—including the old OEM Recovery partition—until only unallocated space remains. Install into that unallocated space.
-
-This is the first irreversible operation.
-
-**STOP 3:** Confirm physically that only the intended original SSD is connected before deleting partitions.
-
-Do not restore a Razer recovery image. Do not import drivers from the old installation. Let Windows Update obtain its baseline drivers.
-
-## Update the clean Windows baseline
-
-1. Complete Windows Setup with a temporary local/admin account if available in the installer flow.
-2. Run Windows Update repeatedly, including applicable firmware/driver updates, rebooting until it is settled.
-3. Confirm Windows Home activation.
-4. Do not enable BitLocker yet; firmware and partition decisions come first.
-
-## Apply only exact Razer firmware
-
-First confirm the computer reports `RZ09-0421x`. Then use only these official Razer pages:
+First confirm the audit reports `RZ09-0421x`. Compare its BIOS/EC versions with the current exact-model packages on these official Razer pages:
 
 - Model support hub: <https://mysupport.razer.com/app/answers/detail/a_id/5900>
 - Firmware/BIOS index: <https://mysupport.razer.com/app/answers/detail/a_id/4166>
@@ -188,7 +182,28 @@ First confirm the computer reports `RZ09-0421x`. Then use only these official Ra
 - RZ09-0421x EC and keyboard updater: <https://mysupport.razer.com/app/answers/detail/a_id/9727>
 - RZ09-0421x BIOS updater: <https://mysupport.razer.com/app/answers/detail/a_id/9729>
 
-Rules:
+## Gate 2A: firmware is already current
+
+If the exact-model Razer pages confirm that BIOS/EC/keyboard firmware is current, do not reflash merely for reassurance. Proceed to the ownership-state reset below and then the Bluefin installation.
+
+## Gate 2B: firmware needs an update
+
+Do not flash firmware from the seller's old Windows installation or from an unofficial portable Windows environment. The safest sequence is:
+
+1. Confirm the backup and installer USBs.
+2. Boot the official Microsoft USB in UEFI mode.
+3. Select Windows 11 Home and a custom installation.
+4. Delete every partition on the **single verified internal 1 TB NVMe** and install into the resulting unallocated space.
+5. Let Windows Update establish a clean baseline; do not import old drivers or OEM recovery software.
+6. Confirm activation, leave BitLocker off temporarily, and apply only the exact Razer packages.
+7. Run `02-verify-clean-windows.ps1` and retain the report.
+8. After firmware verification, this temporary Windows installation will itself be erased by the Bluefin installer.
+
+This temporary clean-Windows cycle is extra work, but it keeps firmware flashing on the supported internal-Windows path.
+
+**STOP 3:** The partition deletion in step 4 is irreversible. Before doing it, disconnect every external data/backup drive and physically confirm that the installer shows only the intended internal 1 TB NVMe.
+
+Firmware rules:
 
 - The updater title and detected model must both say RZ09-0421x.
 - Follow the order and prerequisites on the current Razer pages; do not assume a version number from this document.
@@ -201,7 +216,7 @@ If an updater rejects the model, reports an unexpected downgrade, cannot update 
 
 ## Reset ownership-related firmware state
 
-After successful official updates, enter firmware directly:
+After confirming current firmware or completing the exact official updates, enter firmware directly:
 
 ```powershell
 shutdown.exe /r /fw /t 0
@@ -219,7 +234,7 @@ The unavoidable firmware-menu checks are:
 
 Do not permanently disable an Absolute/Computrace option casually; some firmware makes that selection irreversible. If it is activated or managed unexpectedly, stop and investigate ownership.
 
-Back in Windows, after confirming there is no data to retain, clear old TPM ownership using Windows—not a generic firmware-menu command:
+If a clean Windows firmware-service installation was performed, clear old TPM ownership after confirming there is no data to retain:
 
 ```powershell
 Clear-Tpm
@@ -227,46 +242,29 @@ Clear-Tpm
 
 This destroys TPM-protected keys and may require a physical-presence confirmation during reboot. It is appropriate only because the old installation is being discarded.
 
-Run `02-verify-clean-windows.ps1` as Administrator and retain its report.
+Run `02-verify-clean-windows.ps1` as Administrator and retain its report. If firmware was already current and the clean-Windows cycle was skipped, retain the original audit plus photographs of the reviewed firmware settings instead.
 
-**STOP 5:** Send or inspect the clean-Windows report. Require: activated Windows Home, Secure Boot enabled, TPM ready, expected BIOS version, no unexplained firmware/device errors.
-
----
-
-# PHASE 3 — optional shared-data decision
-
-The default recommendation is **no shared internal partition yet**. Let Windows use the original SSD and Bluefin use the new SSD.
-
-If a shared DJ/music volume is required, make that decision only after both operating systems pass verification. The exact resize/create command must be generated from the final disk report; do not paste a generic `diskpart clean`, `Resize-Partition`, `nvme format`, or `nvme sanitize` command.
-
-If Windows data will ever be written from Linux, disable hibernation and Fast Startup first:
-
-```powershell
-powercfg.exe /hibernate off
-```
-
-Then shut Windows down fully before mounting its shared NTFS volume from Linux:
-
-```powershell
-shutdown.exe /s /t 0
-```
+**STOP 5:** Require: backup verified; Windows edition/activation recorded; expected firmware version; factory Secure Boot keys restored; Secure Boot enabled; TPM/PTT and virtualization enabled; no unknown firmware password or unexplained ownership/management state.
 
 ---
 
-# PHASE 4 — install Bluefin LTS NVIDIA on its own SSD
+# PHASE 3 — install Bluefin across the entire internal SSD
 
-## Gate 4: isolate the Bluefin target
+## Gate 3: isolate the Bluefin target
 
 1. Shut down fully.
-2. Disconnect/remove the Windows SSD temporarily, or disable it in firmware if supported.
-3. Install the new 2/4 TB SSD as the only enabled internal target.
-4. Boot the verified Bluefin USB in UEFI mode.
+2. Disconnect every external backup, archive, and Windows drive.
+3. Leave only the verified Bluefin installer USB attached.
+4. Boot the USB's UEFI entry with Secure Boot enabled.
+5. Confirm the installer shows exactly one internal target matching the audited 1 TB NVMe model and capacity.
 
-If the installer does not show exactly one internal target of the new SSD's expected model and capacity, **STOP 6**.
+If any other internal target appears, or the model/capacity does not match, **STOP 6**. Do not guess from disk numbers.
 
 ## Install
 
-Use automatic partitioning across the **entire new SSD**, as Bluefin recommends. Enable disk encryption if the installer presents the option. If full-disk encryption is missing or the proposed storage screen is ambiguous, stop and take a photograph before committing.
+Use automatic partitioning across the **entire internal 1 TB SSD**, as Bluefin recommends. This deletes the temporary or old Windows installation, OEM recovery partition, boot files, and all remaining data on that drive. Enable disk encryption if the installer presents the option. If encryption is missing or the proposed storage screen is ambiguous, stop and take a photograph before committing.
+
+**STOP 7 — final wipe confirmation:** Verify the backup again, confirm the target's model and capacity, and confirm every external data drive is disconnected. Only then approve the installer's destructive operation.
 
 Install with Secure Boot enabled. If the firmware refuses the LTS NVIDIA installer, stop and use the normal Bluefin NVIDIA Stable fallback. Do not install an operating system that requires Secure Boot to remain disabled.
 
@@ -303,20 +301,13 @@ The booted image should be `ghcr.io/projectbluefin/bluefin-lts-nvidia:stable` or
 
 The former GDX monolithic AI payload is moving into userspace. Consume CUDA frameworks through signed containers and install user tools through Bluefin's supported Brew/container workflow; do not layer random CUDA or NVIDIA RPMs onto the host. `ujust aimode` was announced but was not yet available when this runbook was written, so it is deliberately not used here.
 
-## Reconnect Windows and make Bluefin default
+Run `03-verify-bluefin.sh` and retain its report.
 
-1. Shut down and reconnect the Windows SSD.
-2. Start Bluefin using the firmware boot menu.
-3. Run `03-verify-bluefin.sh` and retain its report.
-4. Inspect `efibootmgr` in the report.
-
-Do not script `efibootmgr -o` until the actual Bluefin and Windows boot-entry numbers are known. After the report identifies them, either set Bluefin first in the firmware UI or generate one exact `efibootmgr -o` command. Use the firmware boot menu when Windows is wanted.
-
-**STOP 7:** Bluefin is accepted only if Secure Boot, its enrolled key, NVIDIA, the internal display, external display, audio, Wi-Fi, Bluetooth, suspend/resume, thermals, and repeated updates behave correctly.
+Bluefin is accepted only if Secure Boot, its enrolled key, NVIDIA, the internal display, external display, audio, Wi-Fi, Bluetooth, suspend/resume, thermals, and repeated updates behave correctly.
 
 ---
 
-# PHASE 5 — acceptance test before committing secrets
+# PHASE 4 — acceptance test before committing secrets
 
 Run through all of the following before treating Bluefin as trusted production equipment:
 
@@ -330,16 +321,56 @@ Run through all of the following before treating Bluefin as trusted production e
 - Idle and sustained-load temperatures are reasonable; no battery swelling is visible.
 - `fwupdmgr security` is reviewed; unsupported checks are distinguished from failures.
 - Bluefin can update and reboot, and the previous deployment is available for rollback.
-- Windows independently boots from its own drive and remains activated.
+- The external backup is readable while connected deliberately and is disconnected when not needed.
 
 Only after acceptance:
 
 - Set your own firmware administrator password and store it in your password manager.
-- Enable BitLocker on the Windows OS volume and retain its recovery key outside the laptop.
 - Confirm Bluefin disk encryption and retain its recovery material outside the laptop.
 - Enroll personal accounts, SSH keys, passkeys, API credentials, or private repositories.
 
-If Bluefin fails the hybrid-NVIDIA, suspend, or thermal acceptance tests, replace only the Linux SSD installation with Ubuntu Studio/Kubuntu/Ubuntu 26.04 LTS. Leave the clean Windows SSD intact.
+If Bluefin fails the hybrid-NVIDIA, suspend, or thermal acceptance tests, replace the Linux installation with Ubuntu Studio/Kubuntu/Ubuntu 26.04 LTS or temporarily reinstall Windows Home. The verified installer media and digital license remain available.
+
+---
+
+# PHASE 5 — optional temporary Windows before the second SSD
+
+The default is to skip this phase. The external drive should remain an archive/backup, not a boot drive.
+
+If Windows is urgently required, first identify the external device:
+
+| External device | Decision |
+|---|---|
+| USB thumb drive | Do not use for portable Windows |
+| Spinning USB hard disk | Do not use for portable Windows |
+| External SATA SSD | Possible but second choice |
+| External NVMe in USB 3.2 Gen 2/Thunderbolt enclosure | Only reasonable portable-Windows candidate |
+
+Create a **fresh** portable Windows installation from an official Microsoft ISO using reputable tooling on another trusted PC. Do not convert or clone the old installation. Keep it separate from the backup drive. Treat this as an unsupported bridge: do not use it for BIOS/EC updates, live DJ performance, or the only copy of important data.
+
+A Bluefin-hosted Windows virtual machine is acceptable for light Windows-only utilities, but it is not the recommended environment for Rekordbox hardware, low-latency audio, direct NVIDIA use, or firmware flashing.
+
+---
+
+# PHASE 6 — add the future internal Windows SSD
+
+When the second NVMe arrives:
+
+1. Back up Bluefin and shut down.
+2. Install the new SSD. Record both drives' manufacturer, model, serial number, and capacity.
+3. Temporarily remove/disable the Bluefin SSD so Windows Setup can touch only the new SSD.
+4. Boot the official Microsoft USB in UEFI mode with Secure Boot enabled.
+5. Clean-install **Windows 11 Home** onto the new SSD's unallocated space.
+6. Update Windows, confirm automatic activation, install only exact Razer drivers/firmware when needed, and run `02-verify-clean-windows.ps1`.
+7. Enable BitLocker and save the recovery key somewhere other than this laptop.
+8. Reconnect/re-enable the Bluefin SSD, place Bluefin first in UEFI boot order, and use the firmware boot menu for Windows.
+
+Do not create an internal shared partition initially. Let each OS own its SSD. Exchange files through an external encrypted SSD, NAS, or synchronized directory. If a shared NTFS volume is designed later, keep containers, Linux home data, databases, model caches, and the sole copy of any music library off it; disable Windows hibernation/Fast Startup before Linux writes to it:
+
+```powershell
+powercfg.exe /hibernate off
+shutdown.exe /s /t 0
+```
 
 ## Primary sources
 
@@ -350,4 +381,6 @@ If Bluefin fails the hybrid-NVIDIA, suspend, or thermal acceptance tests, replac
 - Bluefin GDX purpose and legacy ISO name: <https://docs.projectbluefin.io/gdx/>
 - Microsoft installation-media instructions: <https://support.microsoft.com/en-us/windows/deployment/install-upgrade/create-installation-media-for-windows>
 - Microsoft clean-install instructions: <https://support.microsoft.com/en-us/windows/deployment/install-upgrade/reinstall-windows-with-the-installation-media>
+- Microsoft activation and same-device reinstallation: <https://support.microsoft.com/en-us/windows/activation/activate-windows>
+- Microsoft removed-features list (Windows To Go removed in version 2004): <https://learn.microsoft.com/en-us/windows/whats-new/removed-features>
 - Razer RZ09-0421x support hub: <https://mysupport.razer.com/app/answers/detail/a_id/5900>
