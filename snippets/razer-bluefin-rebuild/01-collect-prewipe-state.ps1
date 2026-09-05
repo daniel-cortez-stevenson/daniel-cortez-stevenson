@@ -1,6 +1,24 @@
 # Razer Blade pre-wipe audit.
 # READ-ONLY: this script does not alter disks, firmware, TPM, boot entries, or Windows.
 
+# Windows 11 is 64-bit, but the legacy "Windows PowerShell (x86)" shortcut starts
+# a 32-bit process and redirects System32 to SysWOW64. Relaunch this same script
+# in native 64-bit Windows PowerShell so dsregcmd, powercfg, and reagentc resolve
+# consistently. This does not elevate privileges or change system state.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    if ([string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        throw 'Save this as a .ps1 file before running it from 32-bit PowerShell.'
+    }
+
+    $nativePowerShell = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $nativePowerShell)) {
+        throw "Native 64-bit Windows PowerShell was not found at $nativePowerShell"
+    }
+
+    & $nativePowerShell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @args
+    exit $LASTEXITCODE
+}
+
 $ErrorActionPreference = 'Continue'
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -35,6 +53,7 @@ Set-Content -LiteralPath $report -Encoding utf8 -Value @(
     'Razer secure-rebuild pre-wipe audit (READ-ONLY)'
     "Generated: $(Get-Date -Format o)"
     'Excluded: serial numbers, full product keys, disk unique IDs, device/tenant IDs.'
+    "PowerShell process: $([IntPtr]::Size * 8)-bit"
 )
 
 Add-Section 'COMPUTER, SKU, CPU, AND MEMORY' {
@@ -112,6 +131,26 @@ Add-Section 'TPM' {
         Select-Object TpmPresent, TpmReady, TpmEnabled, TpmActivated,
             AutoProvisioning, LockedOut, ManufacturerIdTxt, ManufacturerVersion |
         Format-List
+}
+
+Add-Section 'BATTERY HEALTH (NO SERIAL)' {
+    $static = Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryStaticData -ErrorAction Stop |
+        Select-Object -First 1
+    $full = Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryFullChargedCapacity -ErrorAction Stop |
+        Select-Object -First 1
+    $cycles = Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryCycleCount -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    $designMWh = [double]$static.DesignedCapacity
+    $fullMWh = [double]$full.FullChargedCapacity
+    $health = if ($designMWh -gt 0) { [math]::Round(($fullMWh / $designMWh) * 100, 1) } else { $null }
+
+    [pscustomobject]@{
+        DesignCapacityMWh = $designMWh
+        FullChargeCapacityMWh = $fullMWh
+        EstimatedHealthPercent = $health
+        CycleCount = $cycles.CycleCount
+    } | Format-List
 }
 
 Add-Section 'CPU VIRTUALIZATION' {
@@ -205,6 +244,19 @@ Add-Section 'ORGANIZATION JOIN STATE (IDS OMITTED)' {
     $joinStatus |
         Select-String -Pattern '^\s*(AzureAdJoined|EnterpriseJoined|DomainJoined|WorkplaceJoined|DeviceAuthStatus)\s*:' |
         ForEach-Object { $_.Line.Trim() }
+}
+
+Add-Section 'LOCAL AUTOPILOT INDICATORS (NO IDS)' {
+    $autopilotPath = 'HKLM:\SOFTWARE\Microsoft\Provisioning\Diagnostics\AutoPilot'
+    $autopilot = Get-ItemProperty -LiteralPath $autopilotPath -ErrorAction SilentlyContinue
+    $computer = Get-CimInstance Win32_ComputerSystem
+
+    [pscustomobject]@{
+        PartOfDomain = [bool]$computer.PartOfDomain
+        LocalAutopilotDataPresent = Test-Path -LiteralPath $autopilotPath
+        TenantAssignmentPresent = [bool]$autopilot.CloudAssignedTenantId
+        MdmAssignmentPresent = [bool]$autopilot.CloudAssignedMdmId
+    } | Format-List
 }
 
 Add-Section 'WINDOWS INSIDER CONFIGURATION' {
