@@ -1,6 +1,22 @@
 # Verify the clean Windows firmware-service installation.
 # READ-ONLY: this script does not alter Windows, disks, firmware, TPM, or boot entries.
 
+# Relaunch in native 64-bit Windows PowerShell if this file was opened from the
+# legacy "Windows PowerShell (x86)" shortcut. This avoids System32 redirection.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    if ([string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        throw 'Save this as a .ps1 file before running it from 32-bit PowerShell.'
+    }
+
+    $nativePowerShell = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $nativePowerShell)) {
+        throw "Native 64-bit Windows PowerShell was not found at $nativePowerShell"
+    }
+
+    & $nativePowerShell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @args
+    exit $LASTEXITCODE
+}
+
 $ErrorActionPreference = 'Continue'
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -34,6 +50,7 @@ Set-Content -LiteralPath $report -Encoding utf8 -Value @(
     'Razer clean-Windows verification (READ-ONLY)'
     "Generated: $(Get-Date -Format o)"
     'Excluded: serial numbers, full product keys, disk unique IDs, device/tenant IDs.'
+    "PowerShell process: $([IntPtr]::Size * 8)-bit"
 )
 
 Add-Section 'COMPUTER, WINDOWS, AND ACTIVATION' {
@@ -59,9 +76,18 @@ Add-Section 'COMPUTER, WINDOWS, AND ACTIVATION' {
 }
 
 Add-Section 'BIOS' {
-    Get-CimInstance Win32_BIOS |
-        Select-Object Manufacturer, SMBIOSBIOSVersion, ReleaseDate |
-        Format-List
+    $bios = Get-CimInstance Win32_BIOS
+    $parsedVersion = $null
+    try { $parsedVersion = [version]$bios.SMBIOSBIOSVersion } catch {}
+    $minimumVersion = [version]'2.6' # Razer displays this release as 2.06.
+
+    [pscustomobject]@{
+        Manufacturer = $bios.Manufacturer
+        SMBIOSBIOSVersion = $bios.SMBIOSBIOSVersion
+        ReleaseDate = $bios.ReleaseDate
+        AuditedMinimumForRZ090421 = '2.06 (re-check the official Razer page before flashing)'
+        MeetsAuditedMinimum = if ($null -eq $parsedVersion) { 'Unknown' } else { $parsedVersion -ge $minimumVersion }
+    } | Format-List
 }
 
 Add-Section 'SECURE BOOT' {
@@ -74,6 +100,27 @@ Add-Section 'TPM' {
         Select-Object TpmPresent, TpmReady, TpmEnabled, TpmActivated,
             AutoProvisioning, LockedOut, ManufacturerIdTxt, ManufacturerVersion |
         Format-List
+}
+
+Add-Section 'CPU VIRTUALIZATION' {
+    Get-CimInstance Win32_Processor |
+        Select-Object Name, VirtualizationFirmwareEnabled, SecondLevelAddressTranslationExtensions |
+        Format-List
+}
+
+Add-Section 'BATTERY HEALTH (NO SERIAL)' {
+    $static = Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryStaticData -ErrorAction Stop |
+        Select-Object -First 1
+    $full = Get-CimInstance -Namespace 'root\wmi' -ClassName BatteryFullChargedCapacity -ErrorAction Stop |
+        Select-Object -First 1
+    $designMWh = [double]$static.DesignedCapacity
+    $fullMWh = [double]$full.FullChargedCapacity
+
+    [pscustomobject]@{
+        DesignCapacityMWh = $designMWh
+        FullChargeCapacityMWh = $fullMWh
+        EstimatedHealthPercent = if ($designMWh -gt 0) { [math]::Round(($fullMWh / $designMWh) * 100, 1) } else { $null }
+    } | Format-List
 }
 
 Add-Section 'FIRMWARE DEVICES' {
@@ -143,6 +190,19 @@ Add-Section 'ORGANIZATION JOIN STATE (IDS OMITTED)' {
     $joinStatus |
         Select-String -Pattern '^\s*(AzureAdJoined|EnterpriseJoined|DomainJoined|WorkplaceJoined|DeviceAuthStatus)\s*:' |
         ForEach-Object { $_.Line.Trim() }
+}
+
+Add-Section 'LOCAL AUTOPILOT INDICATORS (NO IDS)' {
+    $autopilotPath = 'HKLM:\SOFTWARE\Microsoft\Provisioning\Diagnostics\AutoPilot'
+    $autopilot = Get-ItemProperty -LiteralPath $autopilotPath -ErrorAction SilentlyContinue
+    $computer = Get-CimInstance Win32_ComputerSystem
+
+    [pscustomobject]@{
+        PartOfDomain = [bool]$computer.PartOfDomain
+        LocalAutopilotDataPresent = Test-Path -LiteralPath $autopilotPath
+        TenantAssignmentPresent = [bool]$autopilot.CloudAssignedTenantId
+        MdmAssignmentPresent = [bool]$autopilot.CloudAssignedMdmId
+    } | Format-List
 }
 
 $hash = (Get-FileHash -LiteralPath $report -Algorithm SHA256).Hash
