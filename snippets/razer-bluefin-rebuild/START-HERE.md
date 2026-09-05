@@ -4,6 +4,25 @@ Target reported by the current installation: **Razer Blade 15 (2022), RZ09-0421x
 
 This runbook deliberately stops before each irreversible action. Do not skip a gate. Commands marked **READ-ONLY** collect information. A wipe or firmware operation is never launched by the supplied scripts.
 
+## Audited baseline for this laptop
+
+Audit received 2026-09-06. These observations apply to this machine, not to every RZ09-0421x:
+
+| Check | Observed | Decision |
+|---|---|---|
+| BIOS | Razer 2.00, released 2022-06-24 | Update required. The current exact-model release observed during this review is 2.06; re-check Razer immediately before flashing. |
+| Boot security | UEFI, Secure Boot enabled, TPM present/ready/enabled | Preserve Secure Boot; clear old TPM ownership only after data recovery. |
+| Ownership indicators | No Azure AD, Enterprise, domain, workplace, or local Autopilot assignment indicators | Good local result, but a clean Windows OOBE check is still required because cloud Autopilot registration is not disproved by local registry state. |
+| Internal storage | One healthy 1 TB Samsung NVMe; reported wear 0 | Safe candidate for whole-disk Bluefin after backups and exact-device confirmation. |
+| Battery | 80.219 Wh design, 74.459 Wh full-charge (~92.8%) | Capacity passes. Inspect physically for swelling before firmware work. |
+| CPU virtualization | Supported, but disabled in firmware | Enable Intel virtualization and VT-d/IOMMU after loading BIOS defaults. |
+
+## Important image correction after re-checking Bluefin
+
+This Intel-plus-NVIDIA laptop is a **dual-GPU NVIDIA laptop**, which Bluefin currently places in support Tier 3 and recommends Ubuntu or a custom image for if testing fails. Bluefin LTS/GDX currently also documents Secure Boot and hibernation as mutually exclusive and says its LTS images are not Secure-Boot-enabled.
+
+Therefore this runbook's security-preserving default is now **normal Bluefin NVIDIA Stable**, using the current official `bluefin-nvidia-open-stable-x86_64.iso`. It keeps Secure Boot as an acceptance requirement and still provides Bluefin's container-first development and local-AI tooling. Do not substitute Bluefin GDX/LTS unless its official documentation later says the exact image supports Secure Boot, or you consciously decide that leaving Secure Boot off is acceptable. For this used machine, that trade is not recommended.
+
 ## Intended architecture: one SSD now, two SSDs later
 
 Do not divide the current internal SSD between Bluefin and Windows. Bluefin explicitly says same-disk dual boot is unsupported and recommends a dedicated drive with automatic partitioning.
@@ -12,7 +31,7 @@ Do not divide the current internal SSD between Bluefin and Windows. Bluefin expl
 
 | Physical device | Contents | Purpose |
 |---|---|---|
-| Internal 1 TB NVMe | **Bluefin LTS NVIDIA Stable**, installer-managed encryption | Primary OS; the entire terabyte is available to Linux, containers, models, Whisper, embeddings, and development |
+| Internal 1 TB NVMe | **Bluefin NVIDIA Stable**, installer-managed encryption | Primary OS; the entire terabyte is available to Linux, containers, models, Whisper, embeddings, and development |
 | External backup drive | Selected personal data; official Windows installer files; optionally a quarantined image of the old SSD | Recovery/archive only; it is not trusted as an operating system |
 | Separate USB stick | Verified Bluefin installer | Installation/recovery media |
 | Separate USB stick | Official Windows 11 installer | A clean way to reinstall the licensed Windows edition later |
@@ -21,7 +40,7 @@ Do not divide the current internal SSD between Bluefin and Windows. Bluefin expl
 
 | Physical device | Contents | Purpose |
 |---|---|---|
-| Current internal 1 TB NVMe | Bluefin LTS NVIDIA Stable | Primary OS |
+| Current internal 1 TB NVMe | Bluefin NVIDIA Stable | Primary OS |
 | New internal NVMe | Fresh Windows 11 Home + BitLocker | Rekordbox, Razer firmware tools, and other Windows-only software |
 
 Each internal SSD will then have its own EFI System Partition and boot independently. Keep Bluefin first in the UEFI boot order and use the Razer firmware boot menu when Windows is wanted. Do not make one operating system's bootloader responsible for the other.
@@ -67,19 +86,59 @@ An OEM BIOS updater is not a byte-for-byte replacement of every programmable com
 
 # PHASE 0 — collect state
 
+## Use native 64-bit Windows Terminal
+
+**Windows Terminal is the window; PowerShell is the shell running inside its tab.** Close the legacy window titled `Windows PowerShell (x86)`. On 64-bit Windows, that shortcut redirects `System32` commands and caused the earlier `dsregcmd.exe` and `powercfg.exe` failures.
+
+Open the correct terminal without navigating German menus:
+
+1. Press the Windows key, type `Terminal`, and press **Ctrl+Shift+Enter**.
+2. Approve the administrator prompt.
+3. In the tab menu, choose **Windows PowerShell** or **PowerShell**—never a profile containing `(x86)`.
+4. Paste this architecture check:
+
+```powershell
+[pscustomobject]@{
+    ProcessIs64Bit = [Environment]::Is64BitProcess
+    ProcessBits = [IntPtr]::Size * 8
+    PowerShellHome = $PSHOME
+}
+```
+
+Require `ProcessIs64Bit : True` and `ProcessBits : 64`. The two supplied `.ps1` files also detect a 32-bit host and relaunch themselves in native 64-bit Windows PowerShell, but starting in the correct terminal makes every interactive command behave consistently.
+
+PowerShell navigation for a Linux/macOS user:
+
+| Goal | PowerShell command |
+|---|---|
+| Show the current directory | `pwd` |
+| Go to Downloads | `cd $HOME\Downloads` |
+| List files | `dir` or `Get-ChildItem` |
+| List PowerShell scripts | `dir *.ps1` |
+| Open the current folder in Explorer | `explorer.exe .` |
+| Read a text file | `Get-Content .\file.txt` |
+| Locate a command | `Get-Command command-name` |
+| Run a script in this directory | `& .\script-name.ps1` |
+| Complete a path/command | Press **Tab** |
+| Recall the previous command | Press **Up Arrow** |
+| Stop the current command | Press **Ctrl+C** |
+
+The `&` is PowerShell's call operator, and `.` means the current directory. Unlike Bash, PowerShell normally requires `.\` when executing a file from the current directory. Avoid `Remove-Item`/`rm` while learning: deletion is not a trip to the Recycle Bin.
+
 ## Gate 0: nothing destructive yet
 
 1. Copy `01-collect-prewipe-state.ps1` to the laptop.
-2. Open PowerShell **as Administrator** in that directory.
+2. Open native 64-bit Windows Terminal **as Administrator** and select a PowerShell tab.
 3. Run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\01-collect-prewipe-state.ps1
+cd $HOME\Downloads
+& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File .\01-collect-prewipe-state.ps1
 ```
 
 The script creates a timestamped text report on the Desktop. Send that report back before proceeding. It intentionally omits serial numbers, full license keys, device IDs, tenant IDs, and disk unique IDs.
 
-**STOP 0:** Do not wipe anything until the report confirms the exact model, Windows edition/activation, BIOS version, TPM/Secure Boot state, and number/size of NVMe drives.
+**STOP 0:** Do not wipe anything until the report confirms the exact model, Windows edition/activation, BIOS version, TPM/Secure Boot state, battery health, ownership indicators, virtualization state, and number/size of NVMe drives. This audited laptop passed the information-collection gate; its BIOS update and virtualization changes remain outstanding.
 
 Optional: if the current wallpaper is what you meant by the desktop being beautiful, copy only the image—not OEM programs or recovery files—before wiping:
 
@@ -126,15 +185,13 @@ Use Microsoft's current Media Creation Tool:
 
 The existing license is Windows 11 Home, so reinstall **Home**, not Pro. A matching digital or firmware-embedded license should reactivate automatically on the same device. Keep this installer after Bluefin is installed; it is the clean Windows recovery path for the future second SSD.
 
-### Bluefin LTS NVIDIA USB
+### Bluefin NVIDIA Stable USB
 
-The former **Bluefin GDX LTS** image is being consolidated into **Bluefin LTS NVIDIA**. The intended installed stream is:
+Use the current official **Bluefin → NVIDIA** download. For this x86-64 Intel/NVIDIA laptop, the expected filename at the time of this review is:
 
-`ghcr.io/projectbluefin/bluefin-lts-nvidia:stable`
+`bluefin-nvidia-open-stable-x86_64.iso`
 
-Use the current official **Bluefin LTS → NVIDIA** download. During the naming transition the official ISO may still be called:
-
-`bluefin-gdx-lts-x86_64.iso`
+Do **not** choose `bluefin-gdx-lts-x86_64.iso` for this rebuild. GDX is the NVIDIA/CUDA edition of Bluefin LTS, but the current LTS documentation says those images are not Secure-Boot-enabled. Normal Bluefin also includes its developer and local-AI workflow; add tools in userspace or signed containers after the machine passes acceptance testing.
 
 Download page:
 
@@ -142,7 +199,7 @@ Download page:
 
 Download its accompanying checksum file and verify it on a trusted machine.
 
-Do not infer an ISO URL or download a historical mirror. Follow the current official NVIDIA/LTS link and use the checksum offered next to that exact download. Put only that Bluefin ISO and its checksum file in a new directory, open a shell there, and verify them.
+Do not infer an ISO URL or download a historical mirror. Follow the current official Bluefin NVIDIA link and use the checksum offered next to that exact download. Put only that Bluefin ISO and its checksum file in a new directory, open a shell there, and verify them.
 
 PowerShell:
 
@@ -164,9 +221,9 @@ sha256sum -c ./*CHECKSUM*
 
 The calculated digest must exactly equal the published digest. Use **Fedora Media Writer**, which Bluefin recommends; Ventoy is explicitly unsupported. Writing an installer USB is intentionally not scripted here because selecting the wrong removable device would destroy it.
 
-Keep Secure Boot enabled when testing the Bluefin USB. Bluefin's documentation is temporarily inconsistent during the GDX/LTS migration, so successful Secure Boot of the exact ISO is an explicit acceptance gate—not an assumption.
+Keep Secure Boot enabled when testing the Bluefin USB. Successful Secure Boot of the exact ISO is an explicit acceptance gate—not an assumption. Because Bluefin classifies dual-GPU NVIDIA laptops as Tier 3, display switching, suspend, external monitors, thermals, and NVIDIA containers must all be tested before secrets are enrolled.
 
-**STOP 2:** Confirm the backup opens on another trusted computer, both USB drives boot in UEFI mode, the Bluefin checksum matches, and the Bluefin live environment starts with Secure Boot still enabled. If the LTS NVIDIA image will not boot securely, use normal `bluefin-nvidia-open-stable-x86_64.iso` as the fallback; do not permanently weaken Secure Boot for the preferred image.
+**STOP 2:** Confirm the backup opens on another trusted computer, both USB drives boot in UEFI mode, the Bluefin checksum matches, and `bluefin-nvidia-open-stable-x86_64.iso` starts with Secure Boot still enabled. If it will not boot securely or the hybrid GPU behaves badly, use Ubuntu as the fallback; do not permanently weaken Secure Boot to force Bluefin onto this used laptop.
 
 ---
 
@@ -174,17 +231,19 @@ Keep Secure Boot enabled when testing the Bluefin USB. Bluefin's documentation i
 
 The official Razer firmware updaters are Windows applications. That creates one important gate: decide whether the machine needs a BIOS, EC, or keyboard-firmware update **before** giving the internal SSD to Bluefin.
 
+**This laptop is Gate 2B, not Gate 2A.** Its audit reports BIOS 2.00 dated 2022-06-24. The current exact-model release found during the 2026-09-06 review is 2.06. Treat the exact Razer page and the signed updater's detected model/version as the source of truth at flash time; never force a downgrade or install a package merely because its filename resembles the expected one.
+
 First confirm the audit reports `RZ09-0421x`. Compare its BIOS/EC versions with the current exact-model packages on these official Razer pages:
 
 - Model support hub: <https://mysupport.razer.com/app/answers/detail/a_id/5900>
 - Firmware/BIOS index: <https://mysupport.razer.com/app/answers/detail/a_id/4166>
 - Current RZ09-0421x customer firmware: <https://mysupport.razer.com/app/answers/detail/a_id/14711>
 - RZ09-0421x EC and keyboard updater: <https://mysupport.razer.com/app/answers/detail/a_id/9727>
-- RZ09-0421x BIOS updater: <https://mysupport.razer.com/app/answers/detail/a_id/9729>
+- RZ09-0421x BIOS updater: <https://mysupport.razer.com/app/answers/detail/a_id/9729/~/razer-blade-15-%282022%29-bios-updater-%7C-rz09-0421x>
 
 ## Gate 2A: firmware is already current
 
-If the exact-model Razer pages confirm that BIOS/EC/keyboard firmware is current, do not reflash merely for reassurance. Proceed to the ownership-state reset below and then the Bluefin installation.
+This branch does not apply to the audited BIOS 2.00 state. On a later run, if the exact-model Razer pages and updater confirm that BIOS/EC/keyboard firmware is current, do not reflash merely for reassurance. Proceed to the ownership-state reset below and then the Bluefin installation.
 
 ## Gate 2B: firmware needs an update
 
@@ -194,10 +253,11 @@ Do not flash firmware from the seller's old Windows installation or from an unof
 2. Boot the official Microsoft USB in UEFI mode.
 3. Select Windows 11 Home and a custom installation.
 4. Delete every partition on the **single verified internal 1 TB NVMe** and install into the resulting unallocated space.
-5. Let Windows Update establish a clean baseline; do not import old drivers or OEM recovery software.
-6. Confirm activation, leave BitLocker off temporarily, and apply only the exact Razer packages.
-7. Run `02-verify-clean-windows.ps1` and retain the report.
-8. After firmware verification, this temporary Windows installation will itself be erased by the Bluefin installer.
+5. During Windows out-of-box setup, **stop** if organization branding appears or Windows requires an unfamiliar work/school account. Local checks cannot disprove a cloud-side Autopilot registration; contact the seller before proceeding if enrollment is imposed.
+6. Let Windows Update establish a clean baseline; do not import old drivers or OEM recovery software.
+7. Confirm activation, leave BitLocker off temporarily, and apply only the exact Razer packages.
+8. Run `02-verify-clean-windows.ps1` from native 64-bit Windows Terminal and retain the report.
+9. After firmware verification, this temporary Windows installation will itself be erased by the Bluefin installer.
 
 This temporary clean-Windows cycle is extra work, but it keeps firmware flashing on the supported internal-Windows path.
 
@@ -206,8 +266,10 @@ This temporary clean-Windows cycle is extra work, but it keeps firmware flashing
 Firmware rules:
 
 - The updater title and detected model must both say RZ09-0421x.
-- Follow the order and prerequisites on the current Razer pages; do not assume a version number from this document.
+- The expected BIOS target from this review is 2.06 or a newer exact-model successor shown by Razer. If the page/updater offers something different, stop and verify rather than forcing it.
+- Follow the order and prerequisites on the current Razer pages.
 - Use the original AC adapter and ensure the battery is charged.
+- Inspect the chassis, trackpad, and bottom cover for battery swelling before flashing. Do not flash a swollen or unstable laptop.
 - Suspend BitLocker if it somehow became enabled.
 - Close applications and never interrupt power or force a reboot during a flash.
 - Never use a third-party BIOS image, modded BIOS, generic driver updater, or force-flash option.
@@ -242,9 +304,16 @@ Clear-Tpm
 
 This destroys TPM-protected keys and may require a physical-presence confirmation during reboot. It is appropriate only because the old installation is being discarded.
 
-Run `02-verify-clean-windows.ps1` as Administrator and retain its report. If firmware was already current and the clean-Windows cycle was skipped, retain the original audit plus photographs of the reviewed firmware settings instead.
+Run `02-verify-clean-windows.ps1` as Administrator from native 64-bit Windows Terminal and retain its report:
 
-**STOP 5:** Require: backup verified; Windows edition/activation recorded; expected firmware version; factory Secure Boot keys restored; Secure Boot enabled; TPM/PTT and virtualization enabled; no unknown firmware password or unexplained ownership/management state.
+```powershell
+cd $HOME\Downloads
+& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File .\02-verify-clean-windows.ps1
+```
+
+The report must say `PowerShell process: 64-bit`, show BIOS 2.06 or the currently documented exact-model successor, and show `VirtualizationFirmwareEnabled : True`. If firmware was already current and the clean-Windows cycle was skipped, retain the original audit plus photographs of the reviewed firmware settings instead.
+
+**STOP 5:** Require: backup verified; Windows edition/activation recorded; BIOS 2.06 or current exact-model successor; factory Secure Boot keys restored; Secure Boot enabled; TPM/PTT, Intel virtualization, and VT-d/IOMMU enabled; no unknown firmware password or unexplained ownership/management state.
 
 ---
 
@@ -266,7 +335,7 @@ Use automatic partitioning across the **entire internal 1 TB SSD**, as Bluefin r
 
 **STOP 7 — final wipe confirmation:** Verify the backup again, confirm the target's model and capacity, and confirm every external data drive is disconnected. Only then approve the installer's destructive operation.
 
-Install with Secure Boot enabled. If the firmware refuses the LTS NVIDIA installer, stop and use the normal Bluefin NVIDIA Stable fallback. Do not install an operating system that requires Secure Boot to remain disabled.
+Install `bluefin-nvidia-open-stable-x86_64.iso` with Secure Boot enabled. If the firmware refuses it, stop and use the Ubuntu fallback. Do not switch to GDX/LTS or another image that requires Secure Boot to remain disabled.
 
 During the MOK screen on first boot:
 
@@ -297,9 +366,9 @@ ujust devmode
 bootc status
 ```
 
-The booted image should be `ghcr.io/projectbluefin/bluefin-lts-nvidia:stable` or its explicitly documented successor. A legacy `ublue-os/bluefin-gdx:lts` installation must complete its supported automatic migration and reboot before acceptance. Do not manually rebase between normal Bluefin and Bluefin LTS; Bluefin documents that path as unsupported.
+The booted deployment must identify itself as the normal Bluefin NVIDIA Stable family corresponding to the verified ISO. Record the exact image printed by `bootc status`; do not guess or manually switch to an image name copied from this document. Do not rebase between normal Bluefin and Bluefin LTS/GDX—Bluefin documents that boundary as unsupported and requires a fresh installation or an explicitly supported migration.
 
-The former GDX monolithic AI payload is moving into userspace. Consume CUDA frameworks through signed containers and install user tools through Bluefin's supported Brew/container workflow; do not layer random CUDA or NVIDIA RPMs onto the host. `ujust aimode` was announced but was not yet available when this runbook was written, so it is deliberately not used here.
+Install AI tools through Bluefin's supported userspace/container workflow; do not layer random CUDA or NVIDIA RPMs onto the host. Current Bluefin documentation provides GPU acceleration, Ramalama/Docker model workflows, and `whisper-cpp` through its Brew selection. Confirm GPU access inside the actual Whisper/embedding containers before making them always-on services.
 
 Run `03-verify-bluefin.sh` and retain its report.
 
@@ -376,11 +445,13 @@ shutdown.exe /s /t 0
 
 - Bluefin installation, dedicated-drive, NVIDIA-laptop and Secure Boot guidance: <https://docs.projectbluefin.io/installation/>
 - Bluefin current downloads: <https://docs.projectbluefin.io/downloads/>
-- Bluefin LTS description and limitations: <https://docs.projectbluefin.io/lts/>
-- Bluefin GDX/LTS NVIDIA migration: <https://docs.projectbluefin.io/blog/>
-- Bluefin GDX purpose and legacy ISO name: <https://docs.projectbluefin.io/gdx/>
+- Bluefin LTS Secure Boot limitation: <https://docs.projectbluefin.io/lts/>
+- Bluefin GDX purpose and ISO name: <https://docs.projectbluefin.io/gdx/>
+- Bluefin local AI and GPU tooling: <https://docs.projectbluefin.io/ai/>
 - Microsoft installation-media instructions: <https://support.microsoft.com/en-us/windows/deployment/install-upgrade/create-installation-media-for-windows>
 - Microsoft clean-install instructions: <https://support.microsoft.com/en-us/windows/deployment/install-upgrade/reinstall-windows-with-the-installation-media>
 - Microsoft activation and same-device reinstallation: <https://support.microsoft.com/en-us/windows/activation/activate-windows>
 - Microsoft removed-features list (Windows To Go removed in version 2004): <https://learn.microsoft.com/en-us/windows/whats-new/removed-features>
 - Razer RZ09-0421x support hub: <https://mysupport.razer.com/app/answers/detail/a_id/5900>
+- Razer RZ09-0421x BIOS updater: <https://mysupport.razer.com/app/answers/detail/a_id/9729/~/razer-blade-15-%282022%29-bios-updater-%7C-rz09-0421x>
+- Microsoft Windows Terminal setup: <https://learn.microsoft.com/windows/terminal/install>
